@@ -241,3 +241,9 @@ vllm/grpc/vllm_engine_pb2.pyi
 
 # Ignore generated cpu headers 
 csrc/cpu/cpu_attn_dispatch_generated.h
+vllm/_C*.so
+vllm/_moe_C*.so
+vllm/_rocm_C*.so
+vllm/cumem_allocator*.so
+vllm/vllm_flash_attn/*.so
+vllm/_version.py
