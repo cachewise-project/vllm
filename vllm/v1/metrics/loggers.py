@@ -30,6 +30,21 @@ from vllm.v1.metrics.stats import (
 from vllm.v1.metrics.utils import create_metric_per_engine
 from vllm.v1.spec_decode.metrics import SpecDecodingLogging, SpecDecodingProm
 
+import json
+import os
+import threading
+
+_CW_PERREQ_PATH = os.environ.get("VLLM_PERREQ_JSONL")
+try:
+    if _CW_PERREQ_PATH:
+        os.makedirs(os.path.dirname(_CW_PERREQ_PATH), exist_ok=True)
+    _cw_perreq_fh = (
+        open(_CW_PERREQ_PATH, "a", buffering=1) if _CW_PERREQ_PATH else None
+    )
+except Exception:
+    _cw_perreq_fh = None
+_cw_perreq_lock = threading.Lock()
+
 logger = init_logger(__name__)
 
 PerEngineStatLoggerFactory = Callable[[VllmConfig, int], "StatLoggerBase"]
@@ -188,6 +203,33 @@ class LoggingStatLogger(StatLoggerBase):
                 self.perf_metrics_logging.observe(perf_stats)
         if mm_cache_stats:
             self.mm_caching_metrics.observe(mm_cache_stats)
+        
+
+        if _cw_perreq_fh is not None and iteration_stats is not None:
+            with _cw_perreq_lock:
+                for fr in iteration_stats.finished_requests:
+                    try:
+                        line = json.dumps({
+                            "request_id":            fr.request_id,
+                            "finish_reason":         str(fr.finish_reason),
+                            "e2e_latency_s":         fr.e2e_latency,
+                            "queued_time_s":         fr.queued_time,
+                            "prefill_time_s":        fr.prefill_time,
+                            "decode_time_s":         fr.decode_time,
+                            "inference_time_s":      fr.inference_time,
+                            "mean_time_per_output_token_s":
+                                fr.mean_time_per_output_token,
+                            "num_prompt_tokens":     fr.num_prompt_tokens,
+                            "num_generation_tokens": fr.num_generation_tokens,
+                            "num_cached_tokens":     fr.num_cached_tokens,
+                            "tokens_recomputed":
+                                fr.num_prompt_tokens - max(fr.num_cached_tokens, 0),
+                            "max_tokens_param":      fr.max_tokens_param,
+                            "ts":                    time.time(),
+                        }) + "\n"
+                    except Exception:
+                        continue
+                    _cw_perreq_fh.write(line)
 
     def _update_stats(self):
         now = time.monotonic()
