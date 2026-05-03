@@ -226,6 +226,10 @@ class LoggingStatLogger(StatLoggerBase):
                                 fr.num_prompt_tokens - max(fr.num_cached_tokens, 0),
                             "max_tokens_param":      fr.max_tokens_param,
                             "ts":                    time.time(),
+                            "start_ts":              fr.start_ts,
+                            "end_ts":                fr.end_ts,
+                            "e2e_wall_time_s":       fr.end_ts - fr.start_ts,
+                            "ttft_s":                fr.ttft_s,
                         }) + "\n"
                     except Exception:
                         continue

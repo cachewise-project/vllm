@@ -236,6 +236,9 @@ class FinishedRequestStats:
     mean_time_per_output_token: float = 0.0
     is_corrupted: bool = False
     num_cached_tokens: int = 0
+    start_ts: float = 0.0
+    end_ts: float = 0.0
+    ttft_s: float = 0.0
 
 
 @dataclass
@@ -449,6 +452,9 @@ class IterationStats:
             else 0
         )
 
+        start_ts = req_stats.arrival_time
+        end_ts = time.time()
+
         finished_req = FinishedRequestStats(
             finish_reason=finish_reason,
             request_id=request_id,
@@ -463,6 +469,9 @@ class IterationStats:
             mean_time_per_output_token=mean_time_per_output_token,
             is_corrupted=req_stats.is_corrupted,
             num_cached_tokens=num_cached_tokens,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            ttft_s=req_stats.first_token_latency
         )
         self.finished_requests.append(finished_req)
 
