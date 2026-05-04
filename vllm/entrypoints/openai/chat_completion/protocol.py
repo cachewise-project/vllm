@@ -332,6 +332,11 @@ class ChatCompletionRequest(OpenAIBaseModel):
         ),
     )
 
+    cachewise_policy: dict[str, Any] | None = Field(
+        default=None,
+        description="Cachewise policy parameters.",
+    )
+
     kv_transfer_params: dict[str, Any] | None = Field(
         default=None,
         description="KVTransfer parameters used for disaggregated serving.",

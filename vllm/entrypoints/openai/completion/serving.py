@@ -196,6 +196,7 @@ class OpenAIServingCompletion(OpenAIServing):
                     trace_headers=trace_headers,
                     priority=request.priority,
                     data_parallel_rank=data_parallel_rank,
+                    cachewise_policy=request.cachewise_policy,
                 )
 
             generators.append(generator)

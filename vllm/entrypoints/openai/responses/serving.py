@@ -486,6 +486,7 @@ class OpenAIServingResponses(OpenAIServing):
                 lora_request=lora_request,
                 priority=request.priority,
                 trace_headers=trace_headers,
+                cachewise_policy=request.cachewise_policy,
             )
             generators.append(generator)
 
@@ -632,6 +633,7 @@ class OpenAIServingResponses(OpenAIServing):
         lora_request: LoRARequest | None = None,
         priority: int = 0,
         trace_headers: Mapping[str, str] | None = None,
+        cachewise_policy: dict[str, Any] | None = None,
     ):
         max_model_len = self.model_config.max_model_len
 
@@ -655,6 +657,7 @@ class OpenAIServingResponses(OpenAIServing):
                 lora_request=lora_request,
                 trace_headers=trace_headers,
                 priority=priority,
+                cachewise_policy=cachewise_policy,
             )
 
             async for res in generator:

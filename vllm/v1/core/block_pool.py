@@ -26,6 +26,8 @@ from vllm.v1.core.kv_cache_utils import (
     maybe_convert_block_hash,
 )
 from vllm.v1.request import Request
+from vllm.v1.core.cachewise_policy import cachewise_eviction_score
+import heapq
 
 logger = init_logger(__name__)
 
@@ -143,6 +145,7 @@ class BlockPool:
             actual block size can be a multiple of hash_block_size.
         enable_kv_cache_events: Whether to enable kv cache events.
         metrics_collector: Optional metrics collector for tracking block residency.
+        enable_cachewise_free_heap: Use cachewise heap ordering for free blocks.
     """
 
     def __init__(
@@ -152,10 +155,12 @@ class BlockPool:
         hash_block_size: int,
         enable_kv_cache_events: bool = False,
         metrics_collector: KVCacheMetricsCollector | None = None,
+        enable_cachewise_free_heap: bool = True,
     ):
         assert isinstance(num_gpu_blocks, int) and num_gpu_blocks > 0
         self.num_gpu_blocks = num_gpu_blocks
         self.enable_caching = enable_caching
+        self.enable_cachewise_free_heap = enable_cachewise_free_heap
         self.hash_block_size = hash_block_size
         # All kv-cache blocks.
         self.blocks: list[KVCacheBlock] = [
@@ -179,6 +184,87 @@ class BlockPool:
         self.kv_event_queue: list[KVCacheEvent] = []
 
         self.metrics_collector = metrics_collector
+
+        # self._cachewise_reorder_calls = 0  # incremented every get_cached_block call
+        # self._cachewise_reorder_every = 1  # set >1 to amortize (e.g. 8)
+        # self._cachewise_reorder_k = 32
+
+        self._free_heap: list[tuple[int, float, int, int]] = []
+        self._free_ids: set[int] = set()
+        self._free_heap_seq: int = 0
+        self._free_heap_slack: float = 2.0  # rebuild if len(heap) > slack * len(_free_ids)
+        if self.enable_cachewise_free_heap:
+            self._init_free_heap_from_dll()
+    
+    def _free_heap_key(self, block: KVCacheBlock) -> tuple[int, float, int, int]:
+        """Min-heap key: smaller = allocate / reuse this free row first.
+        Tuple:
+        - 0 = no prefix hash yet (uncached free slot), 1 = still prefix-cached
+          while free — prefer 0 so we reuse empty slots before dropping prefix.
+        - Negated cachewise score so *larger* policy score is *less* urgent to
+          pop first (tune: flip sign if you want highest-score-first).
+        - free_heap_seq: LRU tie among equal (tier, score).
+        - block_id: final tie-break.
+        """
+        tier = 0 if block.block_hash is None else 1
+        s = (
+            cachewise_eviction_score(block.cachewise_policy)
+            if self.enable_caching
+            else 0.0
+        )
+        return (tier, -s, block.free_heap_seq, block.block_id)
+    def _push_free_block_to_heap(self, block: KVCacheBlock) -> None:
+        if not self.enable_cachewise_free_heap:
+            return
+        assert block.ref_cnt == 0 and not block.is_null
+        self._free_heap_seq += 1
+        block.free_heap_seq = self._free_heap_seq
+        self._free_ids.add(block.block_id)
+        heapq.heappush(self._free_heap, self._free_heap_key(block))
+        self._maybe_rebuild_free_heap_if_stale()
+    def _init_free_heap_from_dll(self) -> None:
+        self._free_heap.clear()
+        self._free_ids.clear()
+        self._free_heap_seq = 0
+        for block in self.free_block_queue.get_all_free_blocks():
+            if block.is_null:
+                continue
+            self._push_free_block_to_heap(block)
+    def _maybe_rebuild_free_heap_if_stale(self) -> None:
+        if len(self._free_ids) == 0:
+            self._free_heap.clear()
+            return
+        if len(self._free_heap) <= int(len(self._free_ids) * self._free_heap_slack):
+            return
+        self._rebuild_free_heap()
+    def _rebuild_free_heap(self) -> None:
+        # Resync from authoritative DLL membership.
+        self._free_ids.clear()
+        self._free_heap.clear()
+        self._free_heap_seq = 0
+        for block in self.free_block_queue.get_all_free_blocks():
+            if block.is_null:
+                continue
+            self._free_ids.add(block.block_id)
+        for bid in sorted(self._free_ids):
+            block = self.blocks[bid]
+            self._free_heap_seq += 1
+            block.free_heap_seq = self._free_heap_seq
+            self._free_heap.append(self._free_heap_key(block))
+        heapq.heapify(self._free_heap)
+    def _pop_heap_free_block(self) -> KVCacheBlock:
+        while self._free_heap:
+            _tier, _ns, _seq, bid = heapq.heappop(self._free_heap)
+            if bid not in self._free_ids:
+                continue
+            block = self.blocks[bid]
+            if block.ref_cnt != 0 or block.is_null:
+                self._free_ids.discard(bid)
+                continue
+            self._free_ids.discard(bid)
+            self.free_block_queue.remove(block)
+            return block
+        raise RuntimeError("free heap underflow; heap/DLL/free_ids out of sync")
 
     def get_cached_block(
         self, block_hash: BlockHash, kv_cache_group_ids: list[int]
@@ -269,6 +355,7 @@ class BlockPool:
             )
             blk.block_hash = block_hash_with_group_id
             self.cached_block_hash_to_block.insert(block_hash_with_group_id, blk)
+            blk.cachewise_policy = request.cachewise_policy
             if new_hashes is not None:
                 new_hashes.append(maybe_convert_block_hash(block_hash))
 
@@ -331,7 +418,12 @@ class BlockPool:
         if num_blocks > self.get_num_free_blocks():
             raise ValueError(f"Cannot get {num_blocks} free blocks from the pool")
 
-        ret: list[KVCacheBlock] = self.free_block_queue.popleft_n(num_blocks)
+        if self.enable_cachewise_free_heap:
+            ret = []
+            for _ in range(num_blocks):
+                ret.append(self._pop_heap_free_block())
+        else:
+            ret = self.free_block_queue.popleft_n(num_blocks)
 
         # In order to only iterate the list once, we duplicated code a bit
         if self.enable_caching:
@@ -348,6 +440,61 @@ class BlockPool:
                 if self.metrics_collector:
                     self.metrics_collector.on_block_allocated(block)
         return ret
+
+    def _maybe_reorder_cached_free_head_for_cachewise(self) -> None:
+        """Move low-priority cached+free blocks toward the head of the free list."""
+        if not self.enable_caching:
+            return
+        self._cachewise_reorder_calls += 1
+        if self._cachewise_reorder_calls % self._cachewise_reorder_every != 0:
+            return
+
+        fq = self.free_block_queue
+        fake_head = fq.fake_free_list_head
+        fake_tail = fq.fake_free_list_tail
+
+        first = fake_head.next_free_block
+        if first is None or first is fake_tail:
+            return
+
+        k = min(self._cachewise_reorder_k, fq.num_free_blocks)
+        segment: list[KVCacheBlock] = []
+        cur: KVCacheBlock | None = first
+        for _ in range(k):
+            if cur is None or cur is fake_tail:
+                break
+            segment.append(cur)
+            cur = cur.next_free_block
+
+        if len(segment) < 2:
+            return
+
+        after = segment[-1].next_free_block
+        assert after is not None
+
+        # Unlink [segment[0] .. segment[-1]] from the global free list.
+        fake_head.next_free_block = after
+        after.prev_free_block = fake_head
+
+        for b in segment:
+            b.prev_free_block = None
+            b.next_free_block = None
+
+        segment.sort(
+            key=lambda b: (
+                cachewise_eviction_score(getattr(b, "cachewise_policy", None)),
+                b.block_id,
+            )
+        )
+
+        # Splice segment back at the head.
+        fake_head.next_free_block = segment[0]
+        segment[0].prev_free_block = fake_head
+        for i in range(len(segment) - 1):
+            segment[i].next_free_block = segment[i + 1]
+            segment[i + 1].prev_free_block = segment[i]
+        segment[-1].next_free_block = after
+        after.prev_free_block = segment[-1]
 
     def _maybe_evict_cached_block(self, block: KVCacheBlock) -> bool:
         """
@@ -375,6 +522,7 @@ class BlockPool:
             return False
 
         block.reset_hash()
+        block.cachewise_policy = None
 
         if self.enable_kv_cache_events:
             # FIXME (Chen): Not sure whether we should return `hash_value`
@@ -401,6 +549,8 @@ class BlockPool:
             # ref_cnt=0 means this block is in the free list (i.e. eviction
             # candidate), so remove it.
             if block.ref_cnt == 0 and not block.is_null:
+                if self.enable_cachewise_free_heap:
+                    self._free_ids.discard(block.block_id)
                 self.free_block_queue.remove(block)
             block.ref_cnt += 1
             if self.metrics_collector:
@@ -418,9 +568,18 @@ class BlockPool:
         blocks_list = list(ordered_blocks)
         for block in blocks_list:
             block.ref_cnt -= 1
-        self.free_block_queue.append_n(
-            [block for block in blocks_list if block.ref_cnt == 0 and not block.is_null]
-        )
+        # self.free_block_queue.append_n(
+        #     [block for block in blocks_list if block.ref_cnt == 0 and not block.is_null]
+        # )
+        to_append = [
+            block for block in blocks_list
+            if block.ref_cnt == 0 and not block.is_null
+        ]
+        self.free_block_queue.append_n(to_append)
+        if self.enable_cachewise_free_heap:
+            for block in to_append:
+                self._push_free_block_to_heap(block)
+
 
     def evict_blocks(self, block_ids: set[int]) -> None:
         """evict blocks from the prefix cache by their block IDs.
@@ -465,6 +624,9 @@ class BlockPool:
         # Remove all hashes from all blocks.
         for block in self.blocks:
             block.reset_hash()
+        
+        if self.enable_cachewise_free_heap:
+            self._rebuild_free_heap()
 
         if self.metrics_collector:
             self.metrics_collector.reset()

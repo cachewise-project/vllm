@@ -224,6 +224,11 @@ class ResponsesRequest(OpenAIBaseModel):
         ),
     )
 
+    cachewise_policy: dict[str, Any] | None = Field(
+        default=None,
+        description="Cachewise policy parameters.",
+    )
+
     enable_response_messages: bool = Field(
         default=False,
         description=(

@@ -73,6 +73,7 @@ class Request:
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
         resumable: bool = False,
         reasoning_ended: bool | None = None,
+        cachewise_policy: dict[str, Any] | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -134,6 +135,8 @@ class Request:
         self.spec_token_ids: list[int] = []
         self.num_computed_tokens = 0
         self.cache_salt: str | None = cache_salt
+
+        self.cachewise_policy = cachewise_policy
 
         # Multi-modal related
         self.mm_features = mm_features or []
@@ -198,6 +201,7 @@ class Request:
             block_hasher=block_hasher,
             resumable=request.resumable,
             reasoning_ended=request.reasoning_ended,
+            cachewise_policy=request.cachewise_policy,
         )
 
     def append_output_token_ids(

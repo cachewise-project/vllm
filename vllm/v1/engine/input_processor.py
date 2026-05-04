@@ -29,6 +29,7 @@ from vllm.tokenizers import TokenizerLike
 from vllm.utils import length_from_prompt_token_ids_or_embeds, random_uuid
 from vllm.utils.jsontree import json_iter_leaves
 from vllm.v1.engine import EngineCoreRequest
+from vllm.v1.core.cachewise_policy import parse_cachewise_policy_body
 
 logger = init_logger(__name__)
 
@@ -205,6 +206,7 @@ class InputProcessor:
         priority: int = 0,
         data_parallel_rank: int | None = None,
         resumable: bool = False,
+        cachewise_policy: dict[str, Any] | None = None,
     ) -> EngineCoreRequest:
         self._validate_params(params, supported_tasks)
         self._validate_lora(lora_request)
@@ -318,6 +320,9 @@ class InputProcessor:
                     )
                 )
 
+        if cachewise_policy is not None:
+            cachewise_policy = parse_cachewise_policy_body(cachewise_policy)
+
         return EngineCoreRequest(
             request_id=request_id,
             prompt_token_ids=prompt_token_ids,
@@ -332,6 +337,7 @@ class InputProcessor:
             data_parallel_rank=data_parallel_rank,
             trace_headers=trace_headers,
             resumable=resumable,
+            cachewise_policy=cachewise_policy,
         )
 
     def _validate_prompt_len(

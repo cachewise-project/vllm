@@ -233,6 +233,7 @@ class Scheduler(SchedulerInterface):
             pcp_world_size=self.pcp_world_size,
             hash_block_size=self.block_size,
             metrics_collector=self.kv_metrics_collector,
+            enable_cachewise_free_heap=self.cache_config.enable_cachewise_free_heap,
         )
         # Bind GPU block pool to the KV connector. This must happen after
         # kv_cache_manager is constructed so block_pool is available.
@@ -571,8 +572,31 @@ class Scheduler(SchedulerInterface):
                 request_queue = self._select_waiting_queue_for_scheduling()
                 assert request_queue is not None
 
-                request = request_queue.peek_request()
+
+                # TODO: Original  
+                # request = request_queue.peek_request()
+                # request_id = request.request_id
+
+                # Cachewise implementation 
+                waiting_detached = False
+                if (
+                    self.scheduler_config.prioritize_waiting_by_prefix_cache
+                    and request_queue is self.waiting
+                ):
+                    picked = self._pick_waiting_request_by_prefix_cache(
+                        scheduled_loras
+                    )
+                    if picked is not None:
+                        self.waiting.remove_request(picked)
+                        request = picked
+                        waiting_detached = True
+                    else:
+                        request = request_queue.peek_request()
+                else:
+                    request = request_queue.peek_request()
                 request_id = request.request_id
+
+                # -----------------------------
 
                 # try to promote blocked statuses while traversing skipped queue.
                 if self._is_blocked_waiting_status(
@@ -583,8 +607,16 @@ class Scheduler(SchedulerInterface):
                             "%s is still in WAITING_FOR_REMOTE_KVS state.",
                             request_id,
                         )
-                    request_queue.pop_request()
+                    
+                    # TODO: original 
+                    # request_queue.pop_request()
+                    # step_skipped_waiting.prepend_request(request)
+                    # continue
+
+                    if not waiting_detached:
+                        request_queue.pop_request()
                     step_skipped_waiting.prepend_request(request)
+                    waiting_detached = False
                     continue
 
                 # Check that adding the request still respects the max_loras
@@ -597,9 +629,18 @@ class Scheduler(SchedulerInterface):
                         and request.lora_request.lora_int_id not in scheduled_loras
                     )
                 ):
+                    
+                    # TODO: original
                     # Scheduling would exceed max_loras, skip.
-                    request_queue.pop_request()
+                    # request_queue.pop_request()
+                    # step_skipped_waiting.prepend_request(request)
+                    # continue
+
+                    # Scheduling would exceed max_loras, skip.
+                    if not waiting_detached:
+                        request_queue.pop_request()
                     step_skipped_waiting.prepend_request(request)
+                    waiting_detached = False
                     continue
 
                 num_external_computed_tokens = 0
@@ -625,8 +666,19 @@ class Scheduler(SchedulerInterface):
                             # The request cannot be scheduled because
                             # the KVConnector couldn't determine
                             # the number of matched tokens.
-                            request_queue.pop_request()
+                            
+                            # TODO: original
+                            # request_queue.pop_request()
+                            # step_skipped_waiting.prepend_request(request)
+                            # continue
+                            
+                            # The request cannot be scheduled because
+                            # the KVConnector couldn't determine
+                            # the number of matched tokens.
+                            if not waiting_detached:
+                                request_queue.pop_request()
                             step_skipped_waiting.prepend_request(request)
+                            waiting_detached = False
                             continue
 
                         request.num_external_computed_tokens = ext_tokens
@@ -673,8 +725,17 @@ class Scheduler(SchedulerInterface):
                         not self.scheduler_config.enable_chunked_prefill
                         and num_new_tokens > token_budget
                     ):
+                        
+                        # TODO: original
                         # If chunked_prefill is disabled,
                         # we can stop the scheduling here.
+                        # break
+
+                        # If chunked_prefill is disabled,
+                        # we can stop the scheduling here.
+                        if waiting_detached:
+                            self.waiting.add_request(request)
+                            waiting_detached = False
                         break
 
                     num_new_tokens = min(num_new_tokens, token_budget)
@@ -694,8 +755,15 @@ class Scheduler(SchedulerInterface):
                             encoder_compute_budget,
                             shift_computed_tokens=1 if self.use_eagle else 0,
                         )
+                        # if num_new_tokens == 0:
+                        #     # The request cannot be scheduled.
+                        #     break
+
                         if num_new_tokens == 0:
                             # The request cannot be scheduled.
+                            if waiting_detached:
+                                self.waiting.add_request(request)
+                                waiting_detached = False
                             break
 
                 if self.need_mamba_block_aligned_split:
@@ -705,7 +773,12 @@ class Scheduler(SchedulerInterface):
                         num_new_local_computed_tokens,
                         num_external_computed_tokens,
                     )
+                    # if num_new_tokens == 0:
+                    #     break
                     if num_new_tokens == 0:
+                        if waiting_detached:
+                            self.waiting.add_request(request)
+                            waiting_detached = False
                         break
 
                 # Handles an edge case when P/D Disaggregation
@@ -739,8 +812,15 @@ class Scheduler(SchedulerInterface):
                         num_encoder_tokens=num_encoder_tokens,
                     )
                 ):
+                    # TODO: original
+                    # if request.has_encoder_inputs:
+                    #     self.encoder_cache_manager.free(request)
+                    # break
                     if request.has_encoder_inputs:
                         self.encoder_cache_manager.free(request)
+                    if waiting_detached:
+                        self.waiting.add_request(request)
+                        waiting_detached = False
                     break
 
                 new_blocks = self.kv_cache_manager.allocate_slots(
@@ -759,8 +839,15 @@ class Scheduler(SchedulerInterface):
 
                     # NOTE: we need to untouch the request from the encode cache
                     # manager
+                    # TODO: original
+                    # if request.has_encoder_inputs:
+                    #     self.encoder_cache_manager.free(request)
+                    # break
                     if request.has_encoder_inputs:
                         self.encoder_cache_manager.free(request)
+                    if waiting_detached:
+                        self.waiting.add_request(request)
+                        waiting_detached = False
                     break
 
                 # KVTransfer: the connector uses this info to determine
@@ -783,7 +870,12 @@ class Scheduler(SchedulerInterface):
                             preempted=request.num_preemptions > 0,
                         )
 
-                request = request_queue.pop_request()
+                # TODO: original
+                # request = request_queue.pop_request()
+                if not waiting_detached:
+                    popped = request_queue.pop_request()
+                    assert popped is request
+                waiting_detached = False
                 if load_kv_async:
                     # If loading async, allocate memory and put request
                     # into the WAITING_FOR_REMOTE_KV state.
@@ -1580,6 +1672,55 @@ class Scheduler(SchedulerInterface):
             return self.waiting if waiting_req < skipped_req else self.skipped_waiting
 
         return self.waiting or self.skipped_waiting or None
+
+    @staticmethod
+    def _reattach_detached_waiting(
+        waiting: RequestQueue, request: Request, waiting_detached: bool
+    ) -> bool:
+        if waiting_detached:
+            waiting.add_request(request)
+            return False
+        return waiting_detached
+
+    def _pick_waiting_request_by_prefix_cache(
+        self, scheduled_loras: set[int]
+    ) -> Request | None:
+        """Among eligible main-queue waiters, pick max local+connector prefix."""
+        if not self.waiting:
+            return None
+        best: Request | None = None
+        best_key: tuple[float, float, str] | None = None
+        for req in list(self.waiting):
+            if self._is_blocked_waiting_status(req.status):
+                continue
+            if (
+                self.lora_config
+                and req.lora_request
+                and (
+                    len(scheduled_loras) == self.lora_config.max_loras
+                    and req.lora_request.lora_int_id not in scheduled_loras
+                )
+            ):
+                continue
+            if req.num_computed_tokens > 0:
+                score = float(req.num_computed_tokens)
+            else:
+                _, num_local = self.kv_cache_manager.get_computed_blocks(req)
+                if self.connector is not None:
+                    ext_tokens, _ = self.connector.get_num_new_matched_tokens(
+                        req, num_local
+                    )
+                    if ext_tokens is None:
+                        continue
+                    score = float(num_local + ext_tokens)
+                else:
+                    score = float(num_local)
+            key = (-score, req.arrival_time, req.request_id)
+            if best_key is None or key < best_key:
+                best_key = key
+                best = req
+        return best
+
 
     def _handle_stopped_request(self, request: Request) -> bool:
         """Return True if finished (can be False for resumable requests)."""

@@ -121,6 +121,13 @@ class SchedulerConfig:
     some image tokens can be scheduled (like TTTTIIIII, leaving IIIII),
     it will be scheduled as TTTT in one step and IIIIIIIIII in the next."""
 
+    prioritize_waiting_by_prefix_cache: bool = False
+    """If True, each scheduling step scans all requests in the main waiting
+    queue and tries to promote the one with the largest prefix match against
+    the current GPU KV cache (brute-force O(n) get_computed_blocks per wait).
+    When disabled, the next waiting request follows FCFS / priority policy only.
+    Skipped-waiting (blocked) ordering is unchanged."""
+
     # scheduler class or path. "vllm.v1.core.sched.scheduler.Scheduler"
     # (default) or "mod.custom_class".
     scheduler_cls: str | type[object] | None = None

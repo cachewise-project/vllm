@@ -301,6 +301,7 @@ class AsyncLLM(EngineClient):
         data_parallel_rank: int | None = None,
         prompt_text: str | None = None,
         reasoning_ended: bool | None = None,
+        cachewise_policy: dict[str, Any] | None = None,
     ) -> RequestOutputCollector:
         """Add new request to the AsyncLLM."""
 
@@ -346,6 +347,9 @@ class AsyncLLM(EngineClient):
             )
 
             request = prompt
+            if cachewise_policy is not None:
+                request.cachewise_policy = cachewise_policy
+
             if request_id != request.request_id:
                 logger.warning_once(
                     "AsyncLLM.add_request() was passed a request_id parameter that "
@@ -364,6 +368,7 @@ class AsyncLLM(EngineClient):
                 trace_headers=trace_headers,
                 priority=priority,
                 data_parallel_rank=data_parallel_rank,
+                cachewise_policy=cachewise_policy,
             )
             prompt_text, _, _ = extract_prompt_components(self.model_config, prompt)
 
@@ -542,6 +547,7 @@ class AsyncLLM(EngineClient):
         priority: int = 0,
         data_parallel_rank: int | None = None,
         reasoning_ended: bool | None = None,
+        cachewise_policy: dict[str, Any] | None = None,
     ) -> AsyncGenerator[RequestOutput, None]:
         """
         Main function called by the API server to kick off a request
@@ -571,6 +577,7 @@ class AsyncLLM(EngineClient):
                 data_parallel_rank=data_parallel_rank,
                 prompt_text=prompt_text,
                 reasoning_ended=reasoning_ended,
+                cachewise_policy=cachewise_policy,
             )
 
             # The output_handler task pushes items into the queue.

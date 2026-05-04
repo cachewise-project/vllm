@@ -116,6 +116,7 @@ class KVCacheManager:
         dcp_world_size: int = 1,
         pcp_world_size: int = 1,
         metrics_collector: KVCacheMetricsCollector | None = None,
+        enable_cachewise_free_heap: bool = True,
     ) -> None:
         self.max_model_len = max_model_len
 
@@ -138,6 +139,7 @@ class KVCacheManager:
             pcp_world_size=pcp_world_size,
             hash_block_size=hash_block_size,
             metrics_collector=self.metrics_collector,
+            enable_cachewise_free_heap=enable_cachewise_free_heap,
         )
         self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups)
         self.block_pool = self.coordinator.block_pool

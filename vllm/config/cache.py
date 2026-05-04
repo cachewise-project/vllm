@@ -65,6 +65,9 @@ class CacheConfig:
     `ModelConfig` and that value should be manually duplicated here."""
     enable_prefix_caching: bool = True
     """Whether to enable prefix caching."""
+    enable_cachewise_free_heap: bool = True
+    """If True, free-block allocation uses the cachewise min-heap ordering.
+    If False, use the default doubly-linked free list (popleft_n) only."""
     prefix_caching_hash_algo: PrefixCachingHashAlgo = "sha256"
     """Set the hash algorithm for prefix caching:
 

@@ -453,6 +453,7 @@ class EngineArgs:
     )
     block_size: int | None = None
     enable_prefix_caching: bool | None = None
+    enable_cachewise_free_heap: bool = CacheConfig.enable_cachewise_free_heap
     prefix_caching_hash_algo: PrefixCachingHashAlgo = (
         CacheConfig.prefix_caching_hash_algo
     )
@@ -567,6 +568,9 @@ class EngineArgs:
     )
     enable_mm_processor_stats: bool = ObservabilityConfig.enable_mm_processor_stats
     scheduling_policy: SchedulerPolicy = SchedulerConfig.policy
+    prioritize_waiting_by_prefix_cache: bool = (
+        SchedulerConfig.prioritize_waiting_by_prefix_cache
+    )
     scheduler_cls: str | type[object] | None = SchedulerConfig.scheduler_cls
 
     pooler_config: PoolerConfig | None = ModelConfig.pooler_config
@@ -1001,6 +1005,10 @@ class EngineArgs:
             },
         )
         cache_group.add_argument(
+            "--enable-cachewise-free-heap",
+            **cache_kwargs["enable_cachewise_free_heap"],
+        )
+        cache_group.add_argument(
             "--prefix-caching-hash-algo", **cache_kwargs["prefix_caching_hash_algo"]
         )
         cache_group.add_argument(
@@ -1211,6 +1219,13 @@ class EngineArgs:
                 "default": None,
             },
         )
+
+
+        scheduler_group.add_argument(
+            "--prioritize-waiting-by-prefix-cache",
+            **scheduler_kwargs["prioritize_waiting_by_prefix_cache"],
+        )
+
         scheduler_group.add_argument(
             "--max-num-seqs",
             **{
@@ -1582,6 +1597,7 @@ class EngineArgs:
             num_gpu_blocks_override=self.num_gpu_blocks_override,
             sliding_window=sliding_window,
             enable_prefix_caching=self.enable_prefix_caching,
+            enable_cachewise_free_heap=self.enable_cachewise_free_heap,
             prefix_caching_hash_algo=self.prefix_caching_hash_algo,
             calculate_kv_scales=self.calculate_kv_scales,
             kv_cache_dtype_skip_layers=self.kv_cache_dtype_skip_layers,
@@ -1834,6 +1850,7 @@ class EngineArgs:
             disable_hybrid_kv_cache_manager=self.disable_hybrid_kv_cache_manager,
             async_scheduling=self.async_scheduling,
             stream_interval=self.stream_interval,
+            prioritize_waiting_by_prefix_cache=self.prioritize_waiting_by_prefix_cache,
         )
 
         if not model_config.is_multimodal_model and self.default_mm_loras:

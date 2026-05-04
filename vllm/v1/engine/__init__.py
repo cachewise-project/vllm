@@ -100,6 +100,7 @@ class EngineCoreRequest(
     external_req_id: str | None = None
 
     reasoning_ended: bool | None = None
+    cachewise_policy: dict[str, Any] | None = None
 
     @property
     def params(self) -> SamplingParams | PoolingParams:

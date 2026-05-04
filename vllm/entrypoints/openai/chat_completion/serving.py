@@ -321,6 +321,7 @@ class OpenAIServingChat(OpenAIServing):
                     priority=request.priority,
                     data_parallel_rank=data_parallel_rank,
                     reasoning_ended=reasoning_ended,
+                    cachewise_policy=request.cachewise_policy,
                 )
 
             generators.append(generator)
