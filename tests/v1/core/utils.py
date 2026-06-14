@@ -45,6 +45,7 @@ def create_scheduler(
     max_num_batched_tokens: int = 8192,
     enable_chunked_prefill: bool = True,
     enable_prefix_caching: bool = False,
+    prioritize_waiting_by_prefix_cache: bool = False,
     long_prefill_token_threshold: int = 0,
     disable_chunked_mm_input: bool = False,
     use_kv_connector: None | bool | str | MockKVConfig = None,
@@ -89,6 +90,7 @@ def create_scheduler(
         enable_chunked_prefill=enable_chunked_prefill,
         async_scheduling=async_scheduling,
         is_encoder_decoder=model_config.is_encoder_decoder,
+        prioritize_waiting_by_prefix_cache=prioritize_waiting_by_prefix_cache,
     )
     # Cache config, optionally force APC
     cache_config = CacheConfig(
